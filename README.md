@@ -1,6 +1,6 @@
 # Security Agent
 
-A collection of specialized AI agents for security analysis and vulnerability detection.
+A collection of specialized AI agents for security analysis, vulnerability detection, and automated remediation. Each agent follows the same three-phase remediation workflow: auto-fix zero-risk issues first, remove unused code and resources second, then propose a structured upgrade plan for everything that needs human review.
 
 ## Agents
 
@@ -8,11 +8,7 @@ A collection of specialized AI agents for security analysis and vulnerability de
 
 **File:** [.github/agents/java-security.agent.md](.github/agents/java-security.agent.md)
 
-A Java security expert agent covering OWASP Top 10, CWE weaknesses, and JVM-specific attack surfaces. Use it to audit Java/Spring/Jakarta EE codebases for security issues.
-
-**Triggers:** Java code security audits, dependency CVE scanning, hardcoded credential detection, or reviewing authentication and cryptography implementations.
-
-**Vulnerability coverage:**
+Audits Java/Spring/Jakarta EE codebases for security vulnerabilities across OWASP Top 10 and CWE top weaknesses.
 
 | Category | Examples |
 |---|---|
@@ -24,54 +20,7 @@ A Java security expert agent covering OWASP Top 10, CWE weaknesses, and JVM-spec
 | SSRF | `RestTemplate`, `WebClient`, `new URL()` with user-controlled input |
 | Spring / Jakarta EE | CSRF/CORS disabled, Actuator exposure, open redirect, mass assignment |
 
-**Workflow:**
-1. Scope definition (project / module / file / vulnerability class)
-2. Dependency scan (OWASP Dependency Check, OSS Index)
-3. Static analysis (Semgrep, SpotBugs + FindSecBugs)
-4. Targeted grep passes
-5. Contextual data-flow review
-6. Severity-ranked report with CWE/OWASP references
-7. **Phase 1** — Auto-apply zero-risk fixes
-8. **Phase 2** — Remove unused code and dependencies
-9. **Phase 3** — Propose an upgrade plan for everything that needs attention
-
-### Remediation phases
-
-The agent always remediates in order — it will not skip ahead.
-
-#### Phase 1 — Auto-fix (applied immediately)
-
-Changes that are safe to apply without review:
-
-- **Patch / minor dependency bumps** — same major version, no API changes in changelog, CVE resolved. Applied via `mvn versions:use-next-releases`, build verified green after each batch.
-- **Mechanical one-liner code fixes** — `new Random()` → `SecureRandom`, `MD5`/`SHA-1` → `SHA-256`, `setHttpOnly(false)` → `true`, missing XXE feature flags. Single call-site, no logic change.
-
-The agent will not auto-apply: major version bumps, BOM-managed transitive deps, or any fix that touches business logic or spans multiple call sites.
-
-#### Phase 2 — Dead code & unused dependency removal (applied immediately)
-
-- Unused dependencies confirmed by `mvn dependency:analyze` + zero `import` references in source.
-- Dead classes and methods confirmed by `vscode_listCodeUsages` + grep (guards against reflection-based loading).
-- Unused imports flagged by the compiler.
-
-Build is verified green after each removal.
-
-#### Phase 3 — Upgrade plan (proposed, not applied)
-
-For everything that could not be auto-fixed — major version migrations, CVEs requiring API changes, architectural security fixes — the agent produces a structured plan:
-
-```
-UPGRADE: <library or component>
-Current:  <groupId:artifactId:version>
-Target:   <groupId:artifactId:version>
-CVE/CWE:  <identifier>
-Risk:     <what can break>
-Effort:   XS / S / M / L / XL
-Steps:    1. … 2. … 3. …
-Blockers: <prerequisites>
-```
-
-Followed by a prioritised execution table ordered by CVE severity → CVSS score → effort. Nothing in this phase is applied without explicit approval.
+**Tooling:** OWASP Dependency Check, OSS Index, Semgrep, SpotBugs + FindSecBugs
 
 ---
 
@@ -79,11 +28,9 @@ Followed by a prioritised execution table ordered by CVE severity → CVSS score
 
 **File:** [.github/agents/iac-security.agent.md](.github/agents/iac-security.agent.md)
 
-A cloud infrastructure security expert agent for auditing IaC across all major providers and tools. Covers misconfigurations, insecure defaults, exposed resources, and compliance gaps.
+Audits cloud Infrastructure as Code for misconfigurations, insecure defaults, and compliance gaps across all major providers and formats.
 
-**Supported formats:** Terraform, AWS CloudFormation, Azure Bicep/ARM, Google Cloud Deployment Manager, Kubernetes manifests, Helm charts, Ansible playbooks.
-
-**Vulnerability coverage:**
+**Supported formats:** Terraform · AWS CloudFormation · Azure Bicep/ARM · Google Cloud Deployment Manager · Kubernetes manifests · Helm charts · Ansible playbooks
 
 | Category | Examples |
 |---|---|
@@ -95,134 +42,120 @@ A cloud infrastructure security expert agent for auditing IaC across all major p
 | Kubernetes & Containers | Privileged containers, root user, no resource limits, no network policies, RBAC wildcards |
 | Terraform-Specific | Unencrypted state backend, unpinned provider versions, missing `prevent_destroy` |
 
-**Workflow:**
-1. Scope definition (repo / provider / resource type / vulnerability class)
-2. Automated SAST scan (checkov, trivy, tfsec, kube-score, cfn-nag)
-3. Targeted grep passes
-4. Contextual resource-block review
-5. Severity-ranked report with CIS/CWE/OWASP references
-6. **Phase 1** — Auto-apply zero-risk fixes (encryption flags, logging, tags, security context)
-7. **Phase 2** — Remove unused resources, IAM roles, and orphaned Kubernetes objects
-8. **Phase 3** — Propose an upgrade plan for high-risk items requiring replacement or redesign
+**Tooling:** checkov, trivy, tfsec, kube-score, cfn-nag
 
-### Remediation phases
+---
 
-The agent always remediates in order and verifies `terraform plan` / `kubectl --dry-run` before applying anything.
+## Three-Phase Remediation Workflow
 
-#### Phase 1 — Auto-fix (applied immediately)
+Both agents always remediate in this order and will not skip ahead.
 
-Safe to apply with no resource replacement:
+### Phase 1 — Auto-fix (applied immediately)
 
-- **Flag flips** — `encrypted = true`, `enable_logging = true`, `block_public_acls = true`, `sensitive = true` on outputs.
-- **Kubernetes security context** — `runAsNonRoot`, `readOnlyRootFilesystem`, `capabilities: drop: [ALL]`, `automountServiceAccountToken: false`.
-- **Missing tags** — standard tagging blocks added to all resources.
-- **Provider version pins** — `version` constraints added matching currently deployed version.
+Changes safe to apply without human review. The build or plan is verified green after every batch.
 
-Stop criteria: resource would be **replaced or destroyed**, fix requires a new dependent resource (e.g. KMS key), or change affects production traffic paths.
+**`java-security`**
+- Patch/minor dependency bumps — same major version, CVE resolved, no API changes in changelog
+- Mechanical one-liner fixes — `new Random()` → `SecureRandom`, `MD5` → `SHA-256`, `setHttpOnly(false)` → `true`, missing XXE feature flags
 
-#### Phase 2 — Unused resource removal (applied immediately)
+**`iac-security`**
+- Flag flips — `encrypted = true`, `enable_logging = true`, `block_public_acls = true`, `sensitive = true` on outputs
+- Kubernetes security context — `runAsNonRoot`, `readOnlyRootFilesystem`, `capabilities: drop: [ALL]`, `automountServiceAccountToken: false`
+- Missing resource tags, unpinned provider version constraints
 
-- Orphaned Terraform resources with zero cross-references confirmed by grep.
-- Unused IAM roles/security groups confirmed via AWS CLI last-used data.
-- Orphaned Kubernetes ConfigMaps, Secrets, and ServiceAccounts with no workload references.
+**Stop criteria (never auto-applied):** major version bumps, changes that force resource replacement, fixes that touch business logic or span multiple call sites, anything that affects live production traffic.
 
-Each removal is applied in isolation with a plan/dry-run verification step.
+### Phase 2 — Remove unused code and resources (applied immediately)
 
-#### Phase 3 — Upgrade plan (proposed, not applied)
+Each removal is verified with a build/plan/dry-run before committing.
 
-For changes that carry real risk — enabling encryption on existing unencrypted resources (forces replacement), restricting live security group rules, IAM policy rewrites, Kubernetes/provider major version upgrades, network redesign:
+**`java-security`** — unused dependencies (`mvn dependency:analyze`), dead classes and methods (`vscode_listCodeUsages` + grep), unused imports (compiler warnings)
+
+**`iac-security`** — orphaned Terraform resources (zero cross-references), unused IAM roles/security groups (AWS CLI last-used data), orphaned Kubernetes ConfigMaps, Secrets, and ServiceAccounts
+
+### Phase 3 — Upgrade plan (proposed, not applied)
+
+For anything that cannot be fixed safely — major version migrations, resource replacements, architectural changes, IAM rewrites, network redesigns. Nothing in this phase is applied without explicit approval.
+
+Output format:
 
 ```
-UPGRADE: <resource or component>
-File:     path/to/file.tf
-Current:  <current state>
-Target:   <desired state>
-CVE/CIS:  <identifier>
+UPGRADE: <library, resource, or component>
+File:     <path>
+Current:  <current version or state>
+Target:   <desired version or state>
+CVE/CWE/CIS: <identifier>
 Risk:     <what can break>
 Effort:   XS / S / M / L / XL
 Steps:    1. … 2. … 3. …
 Blockers: <prerequisites>
 ```
 
-Followed by a prioritised execution table ordered by active exploitation risk → CIS severity → effort.
+Followed by a prioritised execution table ordered by severity → CVSS/CIS score → effort.
+
+---
 
 ## Usage
 
 ### Prerequisites
 
-- [VS Code](https://code.visualstudio.com/) with the [GitHub Copilot](https://marketplace.visualstudio.com/items?itemName=GitHub.copilot) and [GitHub Copilot Chat](https://marketplace.visualstudio.com/items?itemName=GitHub.copilot-chat) extensions installed.
-- A GitHub Copilot subscription (Individual, Business, or Enterprise).
+- [VS Code](https://code.visualstudio.com/) with the [GitHub Copilot](https://marketplace.visualstudio.com/items?itemName=GitHub.copilot) and [GitHub Copilot Chat](https://marketplace.visualstudio.com/items?itemName=GitHub.copilot-chat) extensions installed
+- A GitHub Copilot subscription (Individual, Business, or Enterprise)
 
 ### Setup
 
-1. Copy or clone this repository so the `.github/agents/` folder is present at the root of your Java project.
-2. Open the project in VS Code. Copilot automatically discovers any `*.agent.md` files under `.github/agents/`.
+1. Copy or clone this repository so the `.github/agents/` folder is present at the root of your project.
+2. Open the project in VS Code — Copilot automatically discovers any `*.agent.md` files under `.github/agents/`.
 
-### Invoking the agent
+### Invoking an agent
 
-Open Copilot Chat (`Ctrl+Alt+I` / `Cmd+Alt+I`) and mention the agent by name:
+Open Copilot Chat (`Ctrl+Alt+I` / `Cmd+Alt+I`) and prefix your request with the agent name:
 
 ```
 @java-security audit this project for SQL injection and hardcoded credentials
 ```
 
 ```
-@java-security scan the AuthService class for JWT vulnerabilities
-```
-
-```
-@java-security run a full dependency CVE check
-```
-
-The agent will clarify scope if needed, then execute its analysis workflow: dependency scan → static analysis → targeted grep passes → data-flow review → severity-ranked report with fix suggestions.
-
-For infrastructure audits:
-
-```
 @iac-security audit all Terraform modules for IAM and encryption issues
 ```
 
-```
-@iac-security check these Kubernetes manifests for security misconfigurations
-```
-
-```
-@iac-security find all open security groups and hardcoded secrets
-```
+The agent will clarify scope if needed, then run its analysis workflow and remediation phases automatically.
 
 ### Example prompts
 
-| Goal | Prompt |
-|---|---|
-| Full project audit | `@java-security perform a full OWASP Top 10 audit of this project` |
-| Specific vulnerability | `@java-security check for deserialization vulnerabilities` |
-| Single file review | `@java-security review UserController.java for injection risks` |
-| Dependency CVEs | `@java-security scan pom.xml for known CVEs` |
-| Apply fixes | `@java-security fix the weak crypto issues you found` |
-| Full remediation | `@java-security audit and remediate this project` |
-| Upgrade plan only | `@java-security give me an upgrade plan for all outdated and vulnerable dependencies` |
-| Cleanup only | `@java-security remove all unused dependencies and dead code` |
-| IaC full audit | `@iac-security audit and remediate this Terraform repo` |
-| IaC specific check | `@iac-security find all unencrypted storage resources` |
-| K8s security review | `@iac-security review all Kubernetes manifests for CIS benchmark violations` |
-| IaC upgrade plan | `@iac-security give me an upgrade plan for all high-risk infrastructure changes` |
+| Agent | Goal | Prompt |
+|---|---|---|
+| `@java-security` | Full OWASP audit | `perform a full OWASP Top 10 audit of this project` |
+| `@java-security` | Specific vulnerability | `check for deserialization vulnerabilities` |
+| `@java-security` | Single file | `review UserController.java for injection risks` |
+| `@java-security` | Dependency CVEs | `scan pom.xml for known CVEs` |
+| `@java-security` | Full remediation | `audit and remediate this project` |
+| `@java-security` | Upgrade plan only | `give me an upgrade plan for all outdated and vulnerable dependencies` |
+| `@java-security` | Cleanup only | `remove all unused dependencies and dead code` |
+| `@iac-security` | Full IaC audit | `audit and remediate this Terraform repo` |
+| `@iac-security` | Specific check | `find all unencrypted storage resources` |
+| `@iac-security` | Kubernetes | `review all Kubernetes manifests for CIS benchmark violations` |
+| `@iac-security` | Upgrade plan | `give me an upgrade plan for all high-risk infrastructure changes` |
+| `@iac-security` | Secrets scan | `find all hardcoded secrets and open security groups` |
 
 ### How agent files work
 
-Each agent is a Markdown file with a YAML frontmatter block that declares its `name`, `description`, and the `tools` it is allowed to use. Copilot uses the `description` field to automatically suggest the agent when your prompt matches its area of expertise — you can also invoke it explicitly with `@<name>` at any time.
+Each agent is a Markdown file under `.github/agents/` with a YAML frontmatter block declaring its `name`, `description`, and the `tools` it may use. Copilot uses the `description` field to automatically suggest the right agent when your prompt matches its expertise — you can also invoke any agent explicitly with `@<name>` at any time.
+
+---
 
 ## Reporting Format
 
 Each finding is reported as:
 
 ```
-[SEVERITY] CWE-XXX — Short Title
+[SEVERITY] CWE-XXX / CIS-X.X — Short Title
 File: src/main/java/com/example/Foo.java:42
-Description: why this is dangerous
-Evidence: relevant code snippet
-Fix: concrete remediation
+Description: one sentence on why this is dangerous
+Evidence: relevant code or config snippet
+Fix: concrete remediation with example
 CVSS: score (if known)
-References: OWASP A0X:2021, CWE-XXX
+References: OWASP A0X:2021 / CIS Benchmark X.X, CWE-XXX, CVE-XXXX-XXXX
 ```
 
-Severity scale: **CRITICAL** → **HIGH** → **MEDIUM** → **LOW**
+Severity scale: **CRITICAL** (RCE, auth bypass, public data exposure) → **HIGH** (unencrypted data, logging disabled, data exfil) → **MEDIUM** (info leak, overly broad access) → **LOW** (defence-in-depth, missing tags)
