@@ -73,6 +73,79 @@ Blockers: <prerequisites>
 
 Followed by a prioritised execution table ordered by CVE severity → CVSS score → effort. Nothing in this phase is applied without explicit approval.
 
+---
+
+### `iac-security`
+
+**File:** [.github/agents/iac-security.agent.md](.github/agents/iac-security.agent.md)
+
+A cloud infrastructure security expert agent for auditing IaC across all major providers and tools. Covers misconfigurations, insecure defaults, exposed resources, and compliance gaps.
+
+**Supported formats:** Terraform, AWS CloudFormation, Azure Bicep/ARM, Google Cloud Deployment Manager, Kubernetes manifests, Helm charts, Ansible playbooks.
+
+**Vulnerability coverage:**
+
+| Category | Examples |
+|---|---|
+| IAM & Permissions | Wildcard actions/resources, overly permissive assume-role, missing MFA conditions |
+| Network & Exposure | Open security groups (`0.0.0.0/0`), public RDS/S3, SSH/RDP open to internet |
+| Encryption | Unencrypted S3/EBS/RDS/SQS, HTTP listeners, weak TLS policies |
+| Logging & Monitoring | CloudTrail disabled, no VPC flow logs, no S3/ALB access logs |
+| Secrets | Hardcoded passwords/API keys, plaintext Kubernetes Secrets, sensitive outputs |
+| Kubernetes & Containers | Privileged containers, root user, no resource limits, no network policies, RBAC wildcards |
+| Terraform-Specific | Unencrypted state backend, unpinned provider versions, missing `prevent_destroy` |
+
+**Workflow:**
+1. Scope definition (repo / provider / resource type / vulnerability class)
+2. Automated SAST scan (checkov, trivy, tfsec, kube-score, cfn-nag)
+3. Targeted grep passes
+4. Contextual resource-block review
+5. Severity-ranked report with CIS/CWE/OWASP references
+6. **Phase 1** — Auto-apply zero-risk fixes (encryption flags, logging, tags, security context)
+7. **Phase 2** — Remove unused resources, IAM roles, and orphaned Kubernetes objects
+8. **Phase 3** — Propose an upgrade plan for high-risk items requiring replacement or redesign
+
+### Remediation phases
+
+The agent always remediates in order and verifies `terraform plan` / `kubectl --dry-run` before applying anything.
+
+#### Phase 1 — Auto-fix (applied immediately)
+
+Safe to apply with no resource replacement:
+
+- **Flag flips** — `encrypted = true`, `enable_logging = true`, `block_public_acls = true`, `sensitive = true` on outputs.
+- **Kubernetes security context** — `runAsNonRoot`, `readOnlyRootFilesystem`, `capabilities: drop: [ALL]`, `automountServiceAccountToken: false`.
+- **Missing tags** — standard tagging blocks added to all resources.
+- **Provider version pins** — `version` constraints added matching currently deployed version.
+
+Stop criteria: resource would be **replaced or destroyed**, fix requires a new dependent resource (e.g. KMS key), or change affects production traffic paths.
+
+#### Phase 2 — Unused resource removal (applied immediately)
+
+- Orphaned Terraform resources with zero cross-references confirmed by grep.
+- Unused IAM roles/security groups confirmed via AWS CLI last-used data.
+- Orphaned Kubernetes ConfigMaps, Secrets, and ServiceAccounts with no workload references.
+
+Each removal is applied in isolation with a plan/dry-run verification step.
+
+#### Phase 3 — Upgrade plan (proposed, not applied)
+
+For changes that carry real risk — enabling encryption on existing unencrypted resources (forces replacement), restricting live security group rules, IAM policy rewrites, Kubernetes/provider major version upgrades, network redesign:
+
+```
+UPGRADE: <resource or component>
+File:     path/to/file.tf
+Current:  <current state>
+Target:   <desired state>
+CVE/CIS:  <identifier>
+Risk:     <what can break>
+Effort:   XS / S / M / L / XL
+Steps:    1. … 2. … 3. …
+Blockers: <prerequisites>
+```
+
+Followed by a prioritised execution table ordered by active exploitation risk → CIS severity → effort.
+
 ## Usage
 
 ### Prerequisites
@@ -103,6 +176,20 @@ Open Copilot Chat (`Ctrl+Alt+I` / `Cmd+Alt+I`) and mention the agent by name:
 
 The agent will clarify scope if needed, then execute its analysis workflow: dependency scan → static analysis → targeted grep passes → data-flow review → severity-ranked report with fix suggestions.
 
+For infrastructure audits:
+
+```
+@iac-security audit all Terraform modules for IAM and encryption issues
+```
+
+```
+@iac-security check these Kubernetes manifests for security misconfigurations
+```
+
+```
+@iac-security find all open security groups and hardcoded secrets
+```
+
 ### Example prompts
 
 | Goal | Prompt |
@@ -115,6 +202,10 @@ The agent will clarify scope if needed, then execute its analysis workflow: depe
 | Full remediation | `@java-security audit and remediate this project` |
 | Upgrade plan only | `@java-security give me an upgrade plan for all outdated and vulnerable dependencies` |
 | Cleanup only | `@java-security remove all unused dependencies and dead code` |
+| IaC full audit | `@iac-security audit and remediate this Terraform repo` |
+| IaC specific check | `@iac-security find all unencrypted storage resources` |
+| K8s security review | `@iac-security review all Kubernetes manifests for CIS benchmark violations` |
+| IaC upgrade plan | `@iac-security give me an upgrade plan for all high-risk infrastructure changes` |
 
 ### How agent files work
 
